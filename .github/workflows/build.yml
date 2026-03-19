@@ -1,24 +1,114 @@
-name: Build Local Web App
+name: Build-AssetManager (WinForms + SQLite)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
+
+    env:
+      # Toggle architecture here:
+      ARCH: x64          # x64 -> uses Framework64\csc.exe and win-x64 SQLite.Interop.dll
+      # ARCH: x86        # (uncomment for x86 build: uses Framework\ csc.exe and win-x86 interop)
+
+      CFG: Release
+      OUT_DIR: out
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-      - name: Publish Self-Contained
-        run: dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
-      - name: Upload Artifact
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure output dir
+        run: New-Item -ItemType Directory -Force -Path "${{ env.OUT_DIR }}"
+
+      - name: Install NuGet
+        uses: nuget/setup-nuget@v2
+
+      - name: Restore System.Data.SQLite.Core (NuGet)
+        shell: pwsh
+        run: |
+          nuget install System.Data.SQLite.Core -Version 1.0.119 -OutputDirectory packages
+          if (!(Test-Path "packages")) { throw "NuGet restore failed." }
+
+      - name: Resolve SQLite paths
+        id: sqlite
+        shell: pwsh
+        run: |
+          $pkg = Get-ChildItem -Path packages -Filter "System.Data.SQLite.Core.*" | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $pkg) { throw "SQLite package not found." }
+          $pkgPath = $pkg.FullName
+
+          # Managed provider DLL (choose a net46+ lib)
+          $sqliteManaged = Join-Path $pkgPath "lib\net46\System.Data.SQLite.dll"
+          if (!(Test-Path $sqliteManaged)) {
+            $sqliteManaged = Join-Path $pkgPath "lib\net20\System.Data.SQLite.dll"
+          }
+          if (!(Test-Path $sqliteManaged)) { throw "System.Data.SQLite.dll not found in package." }
+
+          # Native interop
+          if ("${{ env.ARCH }}" -eq "x64") {
+            $interop = Join-Path $pkgPath "runtimes\win-x64\native\SQLite.Interop.dll"
+            $cscPath = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          } else {
+            $interop = Join-Path $pkgPath "runtimes\win-x86\native\SQLite.Interop.dll"
+            $cscPath = "C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+          }
+          if (!(Test-Path $interop)) { throw "SQLite.Interop.dll not found for ${{ env.ARCH }}." }
+          if (!(Test-Path $cscPath)) { throw "csc.exe not found: $cscPath" }
+
+          # Emit outputs for later steps
+          "pkgPath=$pkgPath"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "sqliteManaged=$sqliteManaged" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "interop=$interop"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "cscPath=$cscPath"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Copy SQLite DLLs into output folder
+        shell: pwsh
+        run: |
+          Copy-Item "${{ steps.sqlite.outputs.sqliteManaged }}" "${{ env.OUT_DIR }}\System.Data.SQLite.dll" -Force
+          Copy-Item "${{ steps.sqlite.outputs.interop }}" "${{ env.OUT_DIR }}\SQLite.Interop.dll" -Force
+
+      - name: Compile with CSC (WinForms .NET Framework)
+        shell: pwsh
+        run: |
+          $refs = @(
+            "System.Windows.Forms.dll",
+            "System.Drawing.dll",
+            "System.Data.dll",
+            "System.Core.dll",
+            "System.Xml.dll",
+            "System.IO.Compression.dll",
+            "System.IO.Compression.FileSystem.dll",
+            (Resolve-Path "${{ env.OUT_DIR }}\System.Data.SQLite.dll")
+          ) | ForEach-Object { '/r:"' + $_ + '"' } | Out-String
+
+          & "${{ steps.sqlite.outputs.cscPath }}" /nologo /target:winexe `
+            /out:"${{ env.OUT_DIR }}\AssetManager.exe" `
+            $refs `
+            ".\AssetManager.cs"
+
+          if ($LASTEXITCODE -ne 0) { throw "CSC compile failed." }
+
+      - name: Attach optional app icon (skip if missing)
+        shell: pwsh
+        run: |
+          if (Test-Path ".\app.ico") {
+            # Re-compile with icon if available
+            & "${{ steps.sqlite.outputs.cscPath }}" /nologo /target:winexe /win32icon:".\app.ico" `
+              /out:"${{ env.OUT_DIR }}\AssetManager.exe" `
+              /r:"${{ env.OUT_DIR }}\System.Data.SQLite.dll" `
+              /r:"System.Windows.Forms.dll" /r:"System.Drawing.dll" /r:"System.Data.dll" /r:"System.Core.dll" `
+              /r:"System.Xml.dll" /r:"System.IO.Compression.dll" /r:"System.IO.Compression.FileSystem.dll" `
+              ".\AssetManager.cs"
+          }
+
+      - name: Upload artifact (EXE + DLLs)
         uses: actions/upload-artifact@v4
         with:
-          name: MyLocalApp
-          path: |
-            ./publish/AssetManager.exe
-            ./publish/wwwroot/
+          name: AssetManager-${{ env.ARCH }}
+          path: ${{ env.OUT_DIR }}\
