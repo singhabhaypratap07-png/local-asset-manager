@@ -1,5 +1,9 @@
-name: Build App
-on: [push]
+name: Build Local Web App
+
+on:
+  push:
+    branches: [ "main" ]
+
 jobs:
   build:
     runs-on: windows-latest
@@ -9,10 +13,12 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-      - name: Publish
+      - name: Publish Self-Contained
         run: dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
-      - name: Upload
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: MyLocalApp
-          path: ./publish/AssetManager.exe
+          path: |
+            ./publish/AssetManager.exe
+            ./publish/wwwroot/
