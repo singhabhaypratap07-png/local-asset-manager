@@ -1,13 +1,33 @@
 <!DOCTYPE html>
 <html>
-<head><title>Local Asset Manager</title></head>
-<body style="font-family: sans-serif; text-align: center; padding: 50px;">
-    <h1>Asset Manager (Local Web App)</h1>
-    <p id="msg">Loading data from your PC...</p>
+<head>
+    <title>Local Asset Manager</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 50px; background: #f4f4f9; }
+        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); display: inline-block; }
+        h1 { color: #333; }
+        .status { color: green; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Asset Manager (Local Web App)</h1>
+        <p id="msg">Connecting to your local database...</p>
+        <hr>
+        <p style="font-size: 0.8em; color: #666;">Data is stored in <b>assets.db</b> on your PC.</p>
+        <p class="status" id="status"></p>
+    </div>
     <script>
-        fetch('/api/data').then(r => r.json()).then(d => {
-            document.getElementById('msg').innerText = d.message;
-        });
+        fetch('/api/data')
+            .then(r => r.json())
+            .then(d => { 
+                document.getElementById('msg').innerText = d.message;
+                document.getElementById('status').innerText = "Server is Online!";
+            })
+            .catch(e => { 
+                document.getElementById('msg').innerText = "Error connecting to server.";
+                document.getElementById('status').innerText = "Server is Offline.";
+            });
     </script>
 </body>
 </html>
